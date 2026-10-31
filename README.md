@@ -1,5 +1,39 @@
 # dsh-visual-browser
 
+**cnlimiter downstream** of [RestRegular/dsh-visual-browser](https://github.com/RestRegular/dsh-visual-browser),
+pinned to upstream `63b8113a79452c2780d82873e7db58ddd2ebdbb1` (0.13.4).
+The downstream adds element annotations to the existing remote browser; it does
+not inject a commenting extension into every website or start another browser.
+Original MIT attribution is retained.
+
+## Remote element annotations
+
+Open **可视化浏览器**, visit a page, and choose **标注**:
+
+1. Hover to outline an element; click to write a comment. Picking is read-only:
+   it does not forward that click to the website.
+2. Save, edit, or delete comments in the annotation card. Comments belong to the
+   current DSH session and workspace, and are stored privately on the host.
+3. Choose **加入当前对话** to insert the page URL, element selector and comments
+   at the current composer selection. Existing draft content is retained; this
+   does **not** send the message or clear the comments.
+4. Modify the application, reload, and pick again before sending further
+   comments. Old comments remain readable but cannot silently retarget a new
+   document or a replaced node with the same selector.
+
+Canvas, iframe, object and embed picks are explicitly **region comments** with
+a viewport point, not claims that an internal control was identified.
+Input values and hidden page text are not collected. Page labels are untrusted
+context, not instructions to the coding agent.
+
+The live image, inspection and annotation requests use the existing same-origin
+`/visual-browser/api` routes. An HTTPS reverse proxy therefore needs no browser
+extension, public CDP port, mixed-content iframe, or separate annotation server.
+Keep those routes behind the same authentication gateway as the DSH UI; this
+plugin does not provide an independent login or access-control system.
+
+The original browser capabilities are documented below.
+
 A DeepSeek Harness plugin that gives the Agent a **real Chrome** and gives you a **live window into it** — as a tab in the **right Sidebar**, right under the built-in *Browser* entry.
 
 - The Agent never reads the DOM. It reads a numbered list of *visible interactive
@@ -34,15 +68,50 @@ A DeepSeek Harness plugin that gives the Agent a **real Chrome** and gives you a
 
 ## Install
 
+To install **this downstream**, build its local package rather than installing
+the upstream npm release with the same package name:
+
 ```bash
-dsh plugin add @restregular/dsh-visual-browser
+git clone https://github.com/cnlimiter/dsh-visual-browser.git
+cd dsh-visual-browser
+npm test
+npm pack
+dsh plugin --profile web add ./restregular-dsh-visual-browser-0.13.4-cnlimiter.2.tgz
 ```
 
-Or from the Harness UI: **Plugins → Add → `@restregular/dsh-visual-browser`**.
+Do not install a second Visual Browser alongside it. The package keeps the
+upstream bundle identity so its browser, tools and sidebar have one owner.
+`private: true` prevents accidentally publishing this fork under the upstream
+npm scope; it does not prevent local packing.
 
-Requirements: Google Chrome, Microsoft Edge, or Chromium on the machine
-(auto-detected), and Node.js 22 or newer (the plugin ships no runtime
-dependencies; it talks CDP over the built-in WebSocket).
+Requirements: native Chrome, Edge, or Chromium on the **DSH host**, and Node.js
+22.13 or newer. The plugin has no runtime npm dependencies. Use a writable,
+private profile directory owned by the service user. Configure the existing row
+in the profile's `cordis.patch.yml`:
+
+```yaml
+- id: dsh-visual-browser
+  config:
+    headless: true
+    executablePath: /path/to/native/chrome
+    userDataDir: /private/path/visual-browser/chrome-profile
+    viewport:
+      width: 1280
+      height: 800
+```
+
+On the exercised Ubuntu host, the Snap launcher failed outside a Snap login
+cgroup; the installed native executable
+`/snap/chromium/current/usr/lib/chromium-browser/chrome` ran successfully as the
+non-root DSH service user, without `--no-sandbox`. This executable layout is
+distro-specific, not a portable default.
+
+`annotations.json` is saved inside the configured profile directory with mode
+0600 on POSIX. Do not commit that file, Chrome profiles, login cookies or tokens.
+Take a private profile configuration/lockfile snapshot before installation.
+To roll back, remove this bundle through the native plugin manager and remove
+only its configuration row; keep annotation/profile data unless explicitly
+choosing to delete it.
 
 ## Use
 
@@ -356,13 +425,15 @@ your own switches after the built-in ones when a site needs something specific.
 ## Development
 
 ```bash
-npm test    # syntax checks + snapshot/format/route/package smoke tests
+npm test                         # syntax and existing behavioral regressions; two annotation-store boundaries
+node test/manual-annotations.mjs  # real Chromium: no-click picking, node replacement/reload, isolation, persistence
 ```
 
-`.dsh-probe/` (git-ignored) holds the manual probes used while developing:
-`live-probe.mjs` drives the real browser end to end, `ui-probe.mjs` renders the
-real client bundle in Chrome against the real host API and drives the panel with
-real DOM events, and `build-css.mjs` copies the panel CSS and theme tokens for
-that harness.
+Set `CHROME_PATH` when the native executable is not auto-detected. The manual
+browser smoke uses a temporary loopback page and isolated profile, then removes
+both. It is not a substitute for opening the installed DSH sidebar through its
+real HTTPS login, inserting into its actual composer, and checking the live
+image. No source-string assertions or package-description tests are used to
+claim that UI behavior works.
 
 MIT © RestRegular

@@ -1045,6 +1045,8 @@
         starting: false,
         url: '',
         title: '',
+        pages: [],
+        activePageId: '',
         viewport: { width: 1280, height: 800 },
         startedAt: 0,
         actionSeq: 0,
