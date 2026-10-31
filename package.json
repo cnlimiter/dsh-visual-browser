@@ -1,6 +1,6 @@
 {
   "name": "@restregular/dsh-visual-browser",
-  "version": "0.13.4-cnlimiter.2",
+  "version": "0.13.4-cnlimiter.3",
   "private": true,
   "description": "Downstream Visual Browser for remote DeepSeek Harness with element picking, session-scoped annotations and safe composer insertion.",
   "icon": "./icon.svg",

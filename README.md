@@ -32,6 +32,11 @@ extension, public CDP port, mixed-content iframe, or separate annotation server.
 Keep those routes behind the same authentication gateway as the DSH UI; this
 plugin does not provide an independent login or access-control system.
 
+The displayed frame carries the active document revision. Navigation and reload
+invalidate picking until a fresh image arrives. Browser-operation request
+deadlines come from the host's configured startup/navigation/action limits,
+rather than aborting a valid remote navigation after eight seconds.
+
 The original browser capabilities are documented below.
 
 A DeepSeek Harness plugin that gives the Agent a **real Chrome** and gives you a **live window into it** — as a tab in the **right Sidebar**, right under the built-in *Browser* entry.
@@ -76,7 +81,7 @@ git clone https://github.com/cnlimiter/dsh-visual-browser.git
 cd dsh-visual-browser
 npm test
 npm pack
-dsh plugin --profile web add ./restregular-dsh-visual-browser-0.13.4-cnlimiter.2.tgz
+dsh plugin --profile web add ./restregular-dsh-visual-browser-0.13.4-cnlimiter.3.tgz
 ```
 
 Do not install a second Visual Browser alongside it. The package keeps the

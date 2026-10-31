@@ -1047,6 +1047,8 @@
         title: '',
         pages: [],
         activePageId: '',
+        frameRevision: 0,
+        operationTimeoutMs: 0,
         viewport: { width: 1280, height: 800 },
         startedAt: 0,
         actionSeq: 0,
@@ -1388,7 +1390,7 @@
             h('div', { className: 'dvb-annotation-header' },
               h('strong', null, '页面批注'),
               h('button', { type: 'button', className: 'dvb-btn', onClick: props.onClose, 'aria-label': '退出标注' }, '×')),
-            h('p', { className: 'dvb-annotation-hint' }, props.blocked ? 'Agent 正在操作，暂不能标注。' : '点选页面元素添加意见；标注不会点击网页按钮。'),
+            h('p', { className: 'dvb-annotation-hint' }, props.blocked ? '画面尚未就绪或 Agent 正在操作，暂不能标注。' : '点选页面元素添加意见；标注不会点击网页按钮。'),
             editing ? h('div', { className: 'dvb-annotation-editor' },
               h('div', { className: 'dvb-annotation-target' }, (editing.target.kind === 'region' ? '区域：' : '元素：') + (editing.target.selector || editing.target.tag)),
               h('textarea', {
@@ -1439,6 +1441,7 @@
         var [consoleDraft, setConsoleDraft] = useState('');
         var [consoleBusy, setConsoleBusy] = useState(false);
         var [live, setLive] = useState(false);
+        var [frameRevision, setFrameRevision] = useState(0);
         var [streamRetry, setStreamRetry] = useState(0);
         var [retrying, setRetrying] = useState(false);
         var [focused, setFocused] = useState(false);
@@ -1703,9 +1706,10 @@
           function () {
             liveRef.current = false;
             setLive(false);
+            setFrameRevision(0);
             setRetrying(false);
           },
-          [state.startedAt, state.running],
+          [state.startedAt, state.running, state.frameRevision],
         );
 
         /**
@@ -1736,8 +1740,10 @@
               }
             }, 9000);
 
-            var draw = async function (jpeg) {
-              var bitmap = await createImageBitmap(new Blob([jpeg], { type: 'image/jpeg' }));
+            var draw = async function (frame) {
+              if (cancelled || frame.revision !== state.frameRevision) return;
+              var bitmap = await createImageBitmap(new Blob([frame.jpeg], { type: 'image/jpeg' }));
+              if (cancelled) { bitmap.close(); return; }
               var canvas = canvasRef.current;
               if (canvas !== null) {
                 if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
@@ -1755,6 +1761,7 @@
                 if (!liveRef.current) {
                   liveRef.current = true;
                   setLive(true);
+                  setFrameRevision(frame.revision);
                   setRetrying(false);
                 }
               }
@@ -1802,7 +1809,7 @@
                     break;
                   }
                   if (buffer.length < 8 + length) break;
-                  pendingFrame = buffer.slice(8, 8 + length);
+                  pendingFrame = { jpeg: buffer.slice(8, 8 + length), revision: view.getUint32(4, true) };
                   buffer = buffer.slice(8 + length);
                   void drain();
                 }
@@ -1835,7 +1842,7 @@
               }
             };
           },
-          [state.running, state.startedAt, streamRetry, panelSession],
+          [state.running, state.startedAt, state.frameRevision, streamRetry, panelSession],
         );
 
         var refreshState = useCallback(async function () {
@@ -1856,7 +1863,7 @@
             setBusy(label);
             setError('');
             try {
-              var data = await requestJson(path, { method: 'POST', session: panelSession, body: body || {} });
+              var data = await requestJson(path, { method: 'POST', session: panelSession, body: body || {}, timeoutMs: state.operationTimeoutMs });
               if (data && data.state) {
                 stateJsonRef.current = JSON.stringify(data.state);
                 setState(data.state);
@@ -1870,7 +1877,7 @@
               setBusy('');
             }
           },
-          [panelSession],
+          [panelSession, state.operationTimeoutMs],
         );
 
         // Geometry of the picture in CSS pixels, read on demand (never cached).
@@ -3369,7 +3376,7 @@
         };
 
         var postPage = function (body) {
-          return requestJson('/page', { method: 'POST', session: panelSession, body: body }).then(
+          return requestJson('/page', { method: 'POST', session: panelSession, body: body, timeoutMs: state.operationTimeoutMs }).then(
             function (data) {
               if (data && data.state) {
                 stateJsonRef.current = JSON.stringify(data.state);
@@ -3386,7 +3393,7 @@
         };
 
         var postConsole = function (body) {
-          return requestJson('/console', { method: 'POST', session: panelSession, body: body }).then(
+          return requestJson('/console', { method: 'POST', session: panelSession, body: body, timeoutMs: state.operationTimeoutMs }).then(
             function (data) {
               if (data && data.state) {
                 stateJsonRef.current = JSON.stringify(data.state);
@@ -4088,7 +4095,7 @@
                 className: 'dvb-input',
                 type: 'text',
                 spellCheck: false,
-                disabled: locked,
+                disabled: locked || state.operationTimeoutMs === 0,
                 placeholder: t('url.placeholder'),
                 value: draft,
                 onChange: function (event) {
@@ -4272,7 +4279,7 @@
                       type: 'button',
                       className: 'dvb-btn',
                       'data-variant': 'primary',
-                      disabled: Boolean(busy) || locked,
+                      disabled: Boolean(busy) || locked || state.operationTimeoutMs === 0,
                       onClick: startBrowser,
                     },
                     icon('play', 14),
@@ -4334,7 +4341,7 @@
                 ),
             h(AnnotationPanel, {
               key: panelSession, ctx: ctx, session: panelSession, state: state,
-              enabled: annotationOpen, blocked: locked || !live,
+              enabled: annotationOpen, blocked: locked || !live || frameRevision !== state.frameRevision,
               canvas: canvasRef, stage: stageRef, controller: annotationController,
               onClose: function () { setAnnotationOpen(false); },
             }),
