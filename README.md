@@ -6,6 +6,25 @@ The downstream adds element annotations to the existing remote browser; it does
 not inject a commenting extension into every website or start another browser.
 Original MIT attribution is retained.
 
+## Verification scope
+
+Exercised with DSH 0.2.2-alpha.2, Node 24.22.1 and Chromium 156.0.8078.47 on
+Linux, through the installed DSH HTTPS sidebar and native composer. The checks
+covered scaled-canvas picking, save/edit/delete, preserved draft text, no
+automatic submission, workspace isolation, a fresh image after reload and
+rejection of old annotations. A real 10.9-second navigation completed without
+the previous eight-second cancellation.
+
+The acceptance page was a private loopback application: its button changed from
+`保存` to `保存草稿`, and its submission counter remained zero during annotation.
+This proves the installed interaction path, not an autonomous LLM coding task
+or identification of controls inside cross-origin frames.
+
+Upgrade using this repository's packed tarball. An upstream registry update
+under the shared package name replaces the downstream annotation changes.
+When automating the chat composer, do not type a trailing newline as a key: it
+may submit the message. The annotation button uses the native insertion API.
+
 ## Remote element annotations
 
 Open **可视化浏览器**, visit a page, and choose **标注**:
