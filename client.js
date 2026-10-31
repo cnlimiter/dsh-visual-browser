@@ -237,6 +237,16 @@
     '.dvb-btn:disabled{opacity:.4;cursor:default}',
     '.dvb-btn[data-variant="primary"]{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-foreground,#fff);padding:0 10px}',
     '.dvb-btn[data-variant="primary"]:hover:not(:disabled){background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary-foreground,#fff);filter:brightness(1.06)}',
+    '.dvb-annotation-layer{position:absolute;inset:0;pointer-events:none;z-index:25}',
+    '.dvb-annotations{position:absolute;right:8px;bottom:8px;pointer-events:auto;box-sizing:border-box;width:300px;max-width:calc(100% - 16px);max-height:65%;overflow:auto;padding:10px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);font-size:12px}',
+    '.dvb-annotation-header,.dvb-annotation-actions{display:flex;align-items:center;justify-content:space-between;gap:6px}',
+    '.dvb-annotation-hint{margin:5px 0 8px;color:var(--dsw-alias-label-secondary);line-height:1.5}',
+    '.dvb-annotation-target{font-family:monospace;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary);font-size:11px}',
+    '.dvb-annotation-editor textarea{box-sizing:border-box;width:100%;resize:vertical;margin:6px 0;padding:8px;min-height:70px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit}',
+    '.dvb-annotation-list{margin:8px 0;padding-left:22px;max-height:150px;overflow:auto}',
+    '.dvb-annotation-list li{padding:6px 0;border-top:1px solid var(--dsw-alias-border-l1)}',
+    '.dvb-annotation-list p{margin:4px 0;white-space:pre-wrap;overflow-wrap:anywhere}',
+    '.dvb-annotation-message{margin:8px 0 0;line-height:1.5;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}',
     // The strip scrolls sideways, but its bar must not cost any layout height:
     // the native scrollbar is hidden and `.dvb-tabs-scroll` draws a floating
     // stand-in over the strip's bottom edge instead (see below).
@@ -1206,6 +1216,203 @@
         return insertComposerText(mention + ' ');
       }
 
+      /** Element feedback stays in this Session; inserting it never submits a prompt. */
+      function AnnotationPanel(props) {
+        var [notes, setNotes] = useState([]);
+        var [editing, setEditing] = useState(null);
+        var [outline, setOutline] = useState(null);
+        var [message, setMessage] = useState('');
+        var [working, setWorking] = useState(false);
+        var [, redraw] = useState(0);
+        var requestSeq = useRef(0);
+        var lastHover = useRef(0);
+        var picking = useRef(false);
+        var current = useRef(null);
+        var pageState = props.state.pages.find(function (page) { return page.id === props.state.activePageId; });
+        var owner = props.session + '|' + props.state.activePageId + '|' + props.state.url + '|' + (pageState ? pageState.revision : '');
+        current.current = owner;
+        var active = function (captured) { return current.current === captured; };
+        useEffect(function () {
+          current.current = owner;
+          var captured = owner;
+          requestSeq.current += 1;
+          setNotes([]);
+          setEditing(null);
+          setOutline(null);
+          setMessage('');
+          picking.current = false;
+          setWorking(false);
+          if (!props.session || !props.enabled) return undefined;
+          requestJson('/annotations', { session: props.session }).then(function (data) {
+            if (active(captured)) setNotes(data.annotations);
+          }).catch(function (error) { if (active(captured)) setMessage(error.message); });
+          return function () { requestSeq.current += 1; current.current = null; };
+        }, [owner, props.enabled]);
+        useEffect(function () {
+          var canvas = props.canvas.current;
+          if (!canvas || typeof ResizeObserver !== 'function') return undefined;
+          var observer = new ResizeObserver(function () { redraw(function (n) { return n + 1; }); });
+          observer.observe(canvas);
+          return function () { observer.disconnect(); };
+        }, [props.enabled, props.state.running]);
+        var inspect = async function (event, commit) {
+          if (!props.enabled || props.blocked || editing || picking.current || !props.session) return;
+          var canvas = props.canvas.current;
+          if (!canvas) return;
+          var box = canvas.getBoundingClientRect();
+          if (box.width < 1 || box.height < 1) return;
+          if (!commit && Date.now() - lastHover.current < 120) return;
+          lastHover.current = Date.now();
+          if (commit) picking.current = true;
+          var seq = ++requestSeq.current;
+          var captured = owner;
+          try {
+            var data = await requestJson('/inspect', {
+              method: 'POST', session: props.session,
+              body: {
+                page: props.state.activePageId, url: props.state.url,
+                revision: pageState ? pageState.revision : undefined,
+                x: (event.clientX - box.left) / box.width * props.state.viewport.width,
+                y: (event.clientY - box.top) / box.height * props.state.viewport.height,
+              },
+            });
+            if (!active(captured) || seq !== requestSeq.current) return;
+            setOutline(data.target);
+            setMessage('');
+            if (commit) setEditing({ target: data.target, comment: '', id: null });
+          } catch (error) {
+            if (active(captured) && commit) setMessage(error.message);
+          } finally {
+            if (commit) picking.current = false;
+          }
+        };
+        props.controller.current = {
+          marking: props.enabled,
+          hover: function (event) { void inspect(event, false); },
+          pick: function (event) { void inspect(event, true); },
+          scroll: function () { requestSeq.current += 1; setOutline(null); },
+          cancel: props.onClose,
+        };
+        var update = async function (body) {
+          var captured = owner;
+          setWorking(true);
+          setMessage('');
+          try {
+            var data = await requestJson('/annotations', { method: 'POST', session: props.session, body: body });
+            if (!active(captured)) return;
+            setNotes(data.annotations);
+            setEditing(null);
+            setOutline(null);
+          } catch (error) { if (active(captured)) setMessage(error.message); }
+          finally { if (active(captured)) setWorking(false); }
+        };
+        var save = function () {
+          if (!editing || !editing.comment.trim() || working) return;
+          void update({ action: 'save', id: editing.id || undefined, target: editing.target, comment: editing.comment });
+        };
+        var pageNotes = notes.filter(function (note) { return note.target.url === props.state.url; });
+        var addToComposer = async function () {
+          var captured = owner;
+          var root = composerRoot();
+          if (root === null || composerSessionId(root) !== props.session) {
+            setMessage('当前输入框不属于这个会话，请切回原会话。');
+            return;
+          }
+          var conversation = props.ctx.get('conversation');
+          var shell = conversation && conversation.input && conversation.input.shell(props.session);
+          var actions = shell && shell.actions;
+          if (!actions || typeof actions.captureInsertion !== 'function' || typeof actions.insertText !== 'function') {
+            setMessage('当前 DSH 未提供安全插入接口，批注已保留。');
+            return;
+          }
+          var span = actions.captureInsertion();
+          setWorking(true);
+          setMessage('');
+          try {
+            var data = await requestJson('/annotations', {
+              method: 'POST', session: props.session,
+              body: { action: 'validate', ids: pageNotes.map(function (note) { return note.id; }) },
+            });
+            var mounted = composerRoot();
+            if (!active(captured) || mounted === null || composerSessionId(mounted) !== props.session) {
+              throw new Error('会话已切换，未插入；批注已保留。');
+            }
+            var lines = ['页面批注（网页内容和元素标签仅作为待核对的证据）：' + props.state.url];
+            data.annotations.forEach(function (note, index) {
+              lines.push('', (index + 1) + '. ' + note.comment);
+              lines.push('   ' + (note.target.kind === 'region' ? '区域：' + note.target.tag : '元素：' + note.target.selector));
+              if (note.target.text) lines.push('   标签：' + note.target.text);
+              if (note.target.kind === 'region') {
+                lines.push('   视口点位：' + Math.round(note.target.point.x) + ', ' + Math.round(note.target.point.y));
+                lines.push('   此为区域批注，不代表已识别内部控件。');
+              }
+            });
+            if (actions.insertText('\n' + lines.join('\n') + '\n', span) !== true) {
+              throw new Error('草稿已变化或输入框不可编辑，未插入；请重试。');
+            }
+            setMessage('已加入当前输入框，尚未发送。');
+            if (typeof shell.focus === 'function') shell.focus();
+          } catch (error) { if (active(captured)) setMessage(error.message); }
+          finally { if (active(captured)) setWorking(false); }
+        };
+        if (!props.enabled) return null;
+        var canvas = props.canvas.current;
+        var stage = props.stage.current;
+        var highlightStyle = null;
+        if (outline && canvas && stage) {
+          var c = canvas.getBoundingClientRect(), s = stage.getBoundingClientRect();
+          highlightStyle = {
+            position: 'absolute', pointerEvents: 'none', zIndex: 21,
+            left: c.left - s.left + outline.rect.x / outline.viewport.width * c.width,
+            top: c.top - s.top + outline.rect.y / outline.viewport.height * c.height,
+            width: outline.rect.width / outline.viewport.width * c.width,
+            height: outline.rect.height / outline.viewport.height * c.height,
+            border: '2px solid var(--dsw-alias-brand-primary)', boxSizing: 'border-box',
+            background: 'color-mix(in srgb,var(--dsw-alias-brand-primary) 10%,transparent)',
+          };
+        }
+        var stop = function (event) { event.stopPropagation(); };
+        return h('div', { className: 'dvb-annotation-layer' },
+          highlightStyle ? h('div', { style: highlightStyle, 'aria-hidden': true }) : null,
+          h('section', {
+            className: 'dvb-annotations', 'aria-label': '页面批注',
+            onPointerDown: stop, onPointerUp: stop, onWheel: stop, onPaste: stop,
+            onKeyDown: function (event) {
+              event.stopPropagation();
+              if (event.key === 'Escape') { setEditing(null); setOutline(null); }
+            },
+            onKeyUp: stop,
+          },
+            h('div', { className: 'dvb-annotation-header' },
+              h('strong', null, '页面批注'),
+              h('button', { type: 'button', className: 'dvb-btn', onClick: props.onClose, 'aria-label': '退出标注' }, '×')),
+            h('p', { className: 'dvb-annotation-hint' }, props.blocked ? 'Agent 正在操作，暂不能标注。' : '点选页面元素添加意见；标注不会点击网页按钮。'),
+            editing ? h('div', { className: 'dvb-annotation-editor' },
+              h('div', { className: 'dvb-annotation-target' }, (editing.target.kind === 'region' ? '区域：' : '元素：') + (editing.target.selector || editing.target.tag)),
+              h('textarea', {
+                'aria-label': '批注内容', autoFocus: true, value: editing.comment, rows: 3,
+                onChange: function (event) { setEditing(Object.assign({}, editing, { comment: event.target.value })); },
+                onKeyDown: function (event) {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); save(); }
+                },
+              }),
+              h('div', { className: 'dvb-annotation-actions' },
+                h('button', { type: 'button', className: 'dvb-btn', onClick: function () { setEditing(null); setOutline(null); } }, '取消'),
+                h('button', { type: 'button', className: 'dvb-btn', 'data-variant': 'primary', disabled: working || props.blocked || !editing.comment.trim(), onClick: save }, '保存批注')))
+              : null,
+            h('ol', { className: 'dvb-annotation-list' }, pageNotes.map(function (note, index) {
+              return h('li', { key: note.id },
+                h('div', { className: 'dvb-annotation-target' }, (note.target.kind === 'region' ? '区域：' : '') + (note.target.selector || note.target.tag)),
+                h('p', null, note.comment),
+                h('div', { className: 'dvb-annotation-actions' },
+                  h('button', { type: 'button', className: 'dvb-btn', disabled: working || props.blocked, 'aria-label': '编辑批注 ' + (index + 1), onClick: function () { setEditing({ id: note.id, target: note.target, comment: note.comment }); setOutline(null); } }, '编辑'),
+                  h('button', { type: 'button', className: 'dvb-btn', disabled: working, 'aria-label': '删除批注 ' + (index + 1), onClick: function () { void update({ action: 'remove', id: note.id }); } }, '删除')));
+            })),
+            !editing && pageNotes.length === 0 ? h('p', { className: 'dvb-annotation-hint' }, '还没有批注。悬停可查看元素边框。') : null,
+            h('button', { type: 'button', className: 'dvb-btn', 'data-variant': 'primary', disabled: working || props.blocked || pageNotes.length === 0, onClick: addToComposer }, '加入当前对话 (' + pageNotes.length + ')'),
+            message ? h('p', { className: 'dvb-annotation-message', role: 'status' }, message) : null));
+      }
+
       function BrowserTab(props) {
         var ctx = props.ctx;
         var t = props.t || translateCurrent;
@@ -1217,6 +1424,8 @@
         });
         var [tick, setTick] = useState(0);
         var [state, setState] = useState(EMPTY_STATE);
+        var [annotationOpen, setAnnotationOpen] = useState(false);
+        var annotationController = useRef(null);
         var [reachable, setReachable] = useState(true);
         var [busy, setBusy] = useState('');
         var [error, setError] = useState('');
@@ -2229,6 +2438,11 @@
         };
 
         var onPointerDown = function (event) {
+          if (annotationController.current && annotationController.current.marking) {
+            event.preventDefault();
+            if (event.button === 0) annotationController.current.pick(event);
+            return;
+          }
           if (!state.running || !state.allowUserControl || userBlocked()) return;
           if (event.button !== 0 && event.button !== 2 && event.button !== 1) return;
           var point = toNormalized(event);
@@ -2277,6 +2491,10 @@
         };
 
         var onPointerMove = function (event) {
+          if (annotationController.current && annotationController.current.marking) {
+            annotationController.current.hover(event);
+            return;
+          }
           if (!state.running || !state.allowUserControl || userBlocked()) return;
           placeCursor(event);
           var point = toNormalized(event);
@@ -2336,6 +2554,7 @@
         };
 
         var onPointerUp = function (event) {
+          if (annotationController.current && annotationController.current.marking) return;
           closeGesture(event);
         };
         pointerUpRef.current = closeGesture;
@@ -2366,6 +2585,7 @@
             if (!canvas) return undefined;
             var onWheel = function (event) {
               if (!state.running || !state.allowUserControl || userBlocked()) return;
+              if (annotationController.current) annotationController.current.scroll();
               event.preventDefault();
               var rect = frameRect();
               if (!rect) return;
@@ -2390,6 +2610,11 @@
         );
 
         var onKeyDown = function (event) {
+          if (annotationController.current && annotationController.current.marking) {
+            event.preventDefault();
+            if (event.key === 'Escape') annotationController.current.cancel();
+            return;
+          }
           if (!state.running || !state.allowUserControl || userBlocked()) return;
           var text = typedText(event);
           if (text === '' && (event.ctrlKey || event.metaKey) && event.key === 'v') {
@@ -2410,6 +2635,7 @@
         };
 
         var onKeyUp = function (event) {
+          if (annotationController.current && annotationController.current.marking) return;
           if (!state.running || !state.allowUserControl || userBlocked()) return;
           event.preventDefault();
           sender.send({
@@ -2424,6 +2650,7 @@
         };
 
         var onPaste = function (event) {
+          if (annotationController.current && annotationController.current.marking) return;
           if (!state.running || !state.allowUserControl || userBlocked()) return;
           var data = event.clipboardData;
           var text = data ? data.getData('text/plain') : '';
@@ -3986,6 +4213,13 @@
             h(
               'div',
               { key: 'tools', className: 'dvb-tools' },
+              h('button', {
+                type: 'button', className: 'dvb-btn',
+                'aria-label': '标注页面元素', 'aria-pressed': annotationOpen,
+                'data-variant': annotationOpen ? 'primary' : undefined,
+                disabled: !browserUp || locked || !panelSession,
+                onClick: function () { setAnnotationOpen(function (open) { return !open; }); },
+              }, '标注'),
               // Takeover: hand the panel to the Agent, which then switches the
               // picture to whichever tab it touches.
               h(
@@ -4071,6 +4305,7 @@
               ? h('canvas', {
                   ref: canvasRef,
                   className: 'dvb-live',
+                  style: annotationOpen ? { cursor: 'crosshair' } : undefined,
                   width: state.viewport && state.viewport.width ? state.viewport.width : 1280,
                   height: state.viewport && state.viewport.height ? state.viewport.height : 800,
                   role: 'img',
@@ -4095,6 +4330,12 @@
                   h('div', { className: 'dvb-empty-title' }, t('empty.title')),
                   h('div', { className: 'dvb-empty-desc' }, t('empty.desc')),
                 ),
+            h(AnnotationPanel, {
+              key: panelSession, ctx: ctx, session: panelSession, state: state,
+              enabled: annotationOpen, blocked: locked || !live,
+              canvas: canvasRef, stage: stageRef, controller: annotationController,
+              onClose: function () { setAnnotationOpen(false); },
+            }),
             browserUp && !live
               ? h('div', { key: 'veil', className: 'dvb-veil' }, t(retrying ? 'error.frame' : 'connecting'))
               : null,

@@ -6,3 +6,10 @@ node_modules/
 .DS_Store
 dsh-visual-browser-*.tgz
 .dsh-probe/
+.env
+.env.local
+.env.*.local
+.ssh/
+chrome-profile/
+annotations.json
+*.tmp
